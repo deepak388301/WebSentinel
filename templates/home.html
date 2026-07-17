@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="alert {{ 'alert-danger' if mode == 'protect' else 'alert-info' }}">
+    <strong>Mode: {{ mode|upper }}</strong> —
+    {% if mode == 'protect' %}
+        Critical/High severity attacks are being BLOCKED before reaching the target.
+    {% else %}
+        Monitoring only — all traffic is forwarded, nothing is blocked.
+    {% endif %}
+    <br>
+    Protecting: <code>{{ target }}</code>
+</div>
+
+<h3 class="mb-4">Security Overview</h3>
+<div class="row g-3">
+    <div class="col-md-3">
+        <div class="card bg-secondary text-light p-3">
+            <div class="fs-2">{{ total_requests }}</div>
+            <div>Total Requests</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-secondary text-light p-3">
+            <div class="fs-2">{{ total_incidents }}</div>
+            <div>Total Incidents</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-danger text-light p-3">
+            <div class="fs-2">{{ critical_incidents }}</div>
+            <div>Critical Incidents</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-warning text-dark p-3">
+            <div class="fs-2">{{ blocked_count }}</div>
+            <div>Requests Blocked</div>
+        </div>
+    </div>
+</div>
+<div class="row mt-3">
+    <div class="col-md-3">
+        <div class="card bg-success text-light p-3">
+            <div class="fs-2">{{ security_score }}/100</div>
+            <div>Security Score</div>
+        </div>
+    </div>
+</div>
+{% endblock %}

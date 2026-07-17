@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<h3 class="mb-4">Analytics</h3>
+<canvas id="attackChart" height="100"></canvas>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+fetch('/websentinel/api/attack-distribution')
+    .then(res => res.json())
+    .then(data => {
+        new Chart(document.getElementById('attackChart'), {
+            type: 'bar',
+            data: {
+                labels: data.labels,
+                datasets: [{
+                    label: 'Incidents by Attack Type',
+                    data: data.counts,
+                    backgroundColor: '#0d6efd'
+                }]
+            }
+        });
+    });
+</script>
+{% endblock %}

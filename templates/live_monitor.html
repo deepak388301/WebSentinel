@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<h3 class="mb-4">Live Monitor</h3>
+<table class="table table-dark table-striped">
+    <thead>
+        <tr><th>Time</th><th>IP</th><th>Method</th><th>URL</th><th>Status</th></tr>
+    </thead>
+    <tbody>
+        {% for r in requests %}
+        <tr>
+            <td>{{ r.timestamp.strftime("%H:%M:%S") }}</td>
+            <td>{{ r.ip }}</td>
+            <td>{{ r.method }}</td>
+            <td>{{ r.url }}</td>
+            <td>{{ r.status_code }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

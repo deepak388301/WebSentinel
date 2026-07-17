@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<h3 class="mb-4">Incidents</h3>
+<table class="table table-dark table-striped">
+    <thead>
+        <tr><th>ID</th><th>Attack Type</th><th>Severity</th><th>MITRE</th><th>Risk Score</th><th>Evidence</th><th>Recommendation</th></tr>
+    </thead>
+    <tbody>
+        {% for i in incidents %}
+        <tr>
+            <td>{{ i.incident_code }}</td>
+            <td>{{ i.attack_type }}</td>
+            <td>
+                <span class="badge bg-{{ 'danger' if i.severity == 'Critical' else 'warning' if i.severity == 'High' else 'info' }}">
+                    {{ i.severity }}
+                </span>
+            </td>
+            <td>{{ i.mitre_technique }}</td>
+            <td>{{ i.risk_score }}</td>
+            <td>{{ i.evidence }}</td>
+            <td>{{ i.recommendation }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}
