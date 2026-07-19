@@ -1,0 +1,27 @@
+name: Tests                    # Name shown on GitHub
+
+on:                            # When to run
+  push:                        # On every push
+    branches: [ main, master ]
+  pull_request:                # On pull requests too
+    branches: [ main, master ]
+
+jobs:                          # What to do
+  test:
+    runs-on: ubuntu-latest     # Use Ubuntu virtual machine
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11"]  # Test multiple Python versions
+
+    steps:
+    - uses: actions/checkout@v3     # Get your code
+    - name: Set up Python
+      uses: actions/setup-python@v4 # Install Python
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install dependencies
+      run: |
+        pip install pytest flask requests
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+    - name: Run tests
+      run: pytest tests/ -v          # Actually run your tests
