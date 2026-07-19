@@ -9,7 +9,7 @@ Kept in one file for a 20-day project scope — split into request.py / incident
 later if the schema grows.
 """
 
-from datetime import datetime
+from datetime import datetime , timezone
 from flask_sqlalchemy import SQLAlchemy
 
 # db is created here and imported by app.py — this avoids circular imports
@@ -22,7 +22,8 @@ class Request(db.Model):
     __tablename__ = "requests"
 
     id = db.Column(db.Integer, primary_key=True)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    from datetime import datetime, timezone
+    timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     ip = db.Column(db.String(45), nullable=False)          # IPv4/IPv6-safe length
     method = db.Column(db.String(10), nullable=False)      # GET, POST, etc.

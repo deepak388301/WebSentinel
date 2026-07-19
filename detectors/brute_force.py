@@ -28,6 +28,29 @@ def _is_login_endpoint(url: str) -> bool:
     return any(marker in url.lower() for marker in login_markers)
 
 
+def should_preblock(url: str, ip: str) -> bool:
+    """
+    Pre-forward check — used BEFORE the request is sent upstream, so
+    protect mode can actually block an ongoing brute-force attack instead
+    of only logging it after the fact.
+
+    detect() (below) can't run until the response status_code is known,
+    which means the request that TRIPS the threshold (e.g. the 5th failed
+    attempt) always reaches the real backend at least once — there's no
+    way to block a pattern before you've seen enough of it happen. But
+    every request AFTER that point is a known repeat offender: this
+    checks the already-recorded history (no new attempt is logged here)
+    so attempt 6, 7, 8... can be blocked before ever reaching upstream.
+    """
+    if not _is_login_endpoint(url):
+        return False
+
+    now = time.time()
+    timestamps = _failed_attempts.get(ip, [])
+    recent = [t for t in timestamps if now - t <= TIME_WINDOW_SECONDS]
+    return len(recent) >= FAILURE_THRESHOLD
+
+
 def detect(data: dict):
     """
     Expects data to contain: url, ip, status_code.

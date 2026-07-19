@@ -10,6 +10,22 @@ and add it to DETECTOR_MODULES below. Nothing else in the app needs to change.
 from . import sql, xss, traversal, brute_force, enumeration
 
 DETECTOR_MODULES = [sql, xss, traversal, brute_force, enumeration]
+PRE_FORWARD_DETECTORS = [sql, xss, traversal, enumeration]  # All except brute_force
+
+
+def run_pre_forward_detectors(data: dict):
+    """
+    Runs detectors that inspect the REQUEST (not the response).
+    These run before forwarding the request upstream, so blocking can happen early.
+    Brute force detection requires the response status_code and runs separately.
+    Returns a LIST of findings.
+    """
+    findings = []
+    for module in PRE_FORWARD_DETECTORS:
+        result = module.detect(data)
+        if result:
+            findings.append(result)
+    return findings
 
 
 def run_all_detectors(data: dict):

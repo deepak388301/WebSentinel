@@ -55,26 +55,28 @@ Then send traffic to the PROXY's port (8080), not the real site's port —
 the proxy forwards it onward after inspection.
 """
 
+import csv
+import io
 import os
 import json
 import requests as upstream_requests
-from flask import Flask, request, Response, render_template, jsonify
+from datetime import datetime, timedelta, timezone
+from flask import Flask, Blueprint, request, Response, render_template, jsonify, current_app
+from sqlalchemy import func, or_
 
 from database.models import db, Request as RequestModel, Incident
-from detectors import run_all_detectors
+from detectors import run_pre_forward_detectors, brute_force
 from utils.risk_engine import calculate_risk
-
-# ---------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------
-TARGET_URL = os.environ.get("WEBSENTINEL_TARGET", "http://127.0.0.1:9000").rstrip("/")
-MODE = os.environ.get("WEBSENTINEL_MODE", "detect")  # "detect" or "protect"
 
 # Only these severities get blocked in "protect" mode — Medium/Low are
 # logged but still forwarded, since blocking on low-confidence findings
 # would hurt real users more than it helps (a classic WAF false-positive
 # problem you'll want to tune per deployment).
 BLOCK_SEVERITIES = {"Critical", "High"}
+
+DEFAULT_TARGET_URL = "http://127.0.0.1:9000"
+DEFAULT_MODE = "detect"
+APP_STARTED_AT = datetime.now(timezone.utc)
 
 # Headers that must NOT be relayed as-is between proxy and client —
 # these are connection-level headers that don't survive proxying correctly.
@@ -84,21 +86,102 @@ HOP_BY_HOP_HEADERS = {
     "proxy-authorization", "te", "trailers", "upgrade",
 }
 
-def create_app():
-    app = Flask(__name__)
-    app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
-        "WEBSENTINEL_DB_URI", "sqlite:///websentinel_proxy.db"
+websentinel_bp = Blueprint("websentinel", __name__, url_prefix="/websentinel")
+
+def init_app(app, database_uri=None, mode=None, target_url=None):
+    app.config["SQLALCHEMY_DATABASE_URI"] = (
+        database_uri
+        or os.environ.get("WEBSENTINEL_DB_URI", "sqlite:///websentinel_proxy.db")
     )
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    app.config["WEBSENTINEL_MODE"] = mode or os.environ.get("WEBSENTINEL_MODE", DEFAULT_MODE)
+    app.config["WEBSENTINEL_TARGET"] = (
+        (target_url or os.environ.get("WEBSENTINEL_TARGET", DEFAULT_TARGET_URL))
+        .rstrip("/")
+    )
     db.init_app(app)
+
+
+def create_app(database_uri=None, mode=None, target_url=None):
+    app = Flask(__name__)
+    init_app(app, database_uri, mode, target_url)
+    app.register_blueprint(websentinel_bp)
+
+    # The catch-all proxy route can't use a decorator like the dashboard
+    # routes above, because it needs to bind to THIS specific app instance
+    # (create_app() may be called more than once, e.g. once per test).
+    # Registered after the blueprint, but Werkzeug matches by rule
+    # specificity regardless of registration order, so /websentinel/* is
+    # never shadowed by this catch-all.
+    app.add_url_rule(
+        "/", defaults={"path": ""}, view_func=proxy,
+        methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    )
+    app.add_url_rule(
+        "/<path:path>", view_func=proxy,
+        methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    )
 
     with app.app_context():
         db.create_all()
 
     return app
 
+# Initialize module-level app for runtime and gunicorn use.
+# Register the blueprint after all route decorators are defined.
 
-app = create_app()
+def format_uptime(start_time):
+    elapsed = datetime.now(timezone.utc) - start_time
+    days, remainder = divmod(int(elapsed.total_seconds()), 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, _ = divmod(remainder, 60)
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    parts.append(f"{minutes}m")
+    return " ".join(parts)
+
+
+def build_trend(days=7):
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days - 1)
+    rows = (
+        db.session.query(func.strftime("%Y-%m-%d", Incident.created_at), func.count(Incident.id))
+        .filter(Incident.created_at >= cutoff)
+        .group_by(func.strftime("%Y-%m-%d", Incident.created_at))
+        .order_by(func.strftime("%Y-%m-%d", Incident.created_at))
+        .all()
+    )
+    row_map = {row[0]: row[1] for row in rows}
+    labels = []
+    counts = []
+    for i in range(days - 1, -1, -1):
+        day = (datetime.now(timezone.utc) - timedelta(days=i)).date().strftime("%Y-%m-%d")
+        labels.append(day)
+        counts.append(row_map.get(day, 0))
+    return labels, counts
+
+
+def request_to_dict(req):
+    attacks = [incident.attack_type for incident in req.incidents]
+    severity = req.incidents[0].severity if req.incidents else None
+    return {
+        "timestamp": req.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+        "ip": req.ip,
+        "method": req.method,
+        "path": req.url,
+        "status_code": req.status_code,
+        "attack": bool(attacks),
+        "attack_type": attack_types_to_label(attacks),
+        "severity": severity,
+    }
+
+
+def attack_types_to_label(attacks):
+    if not attacks:
+        return None
+    return ", ".join(sorted(set(attacks)))
 
 
 # ---------------------------------------------------------------------
@@ -106,8 +189,9 @@ app = create_app()
 # ---------------------------------------------------------------------
 def inspect_request():
     """Builds the same 'data' dict shape the detectors already expect
-    (see detectors/*.py), runs the Detection Engine, and persists the
-    Request record. Returns (data, findings)."""
+    (see detectors/*.py), runs the PRE-FORWARD Detection Engine
+    (request-only detectors for early blocking), and returns (data, findings).
+    Post-response detectors (brute_force) run separately after upstream response."""
     query_payload = request.query_string.decode("utf-8", errors="ignore")
     try:
         body_payload = request.get_data(as_text=True)
@@ -123,7 +207,7 @@ def inspect_request():
         "user_agent": request.headers.get("User-Agent", ""),
     }
 
-    findings = run_all_detectors(data)
+    findings = run_pre_forward_detectors(data)
     return data, findings
 
 
@@ -168,18 +252,36 @@ def is_blockable(findings):
 # Dashboard routes — namespaced under /websentinel/ so they never clash
 # with the real site's own routes on the proxied path.
 # ---------------------------------------------------------------------
-@app.route("/websentinel/")
+@websentinel_bp.route("/")
 def dashboard_home():
     total_requests = RequestModel.query.count()
     total_incidents = Incident.query.count()
     critical = Incident.query.filter_by(severity="Critical").count()
+    high = Incident.query.filter_by(severity="High").count()
+    medium = Incident.query.filter_by(severity="Medium").count()
+    low = Incident.query.filter_by(severity="Low").count()
     blocked = Incident.query.filter_by(status="Blocked").count()
-    penalty = (
-        critical * 15
-        + Incident.query.filter_by(severity="High").count() * 8
-        + Incident.query.filter_by(severity="Medium").count() * 3
-    )
+    penalty = critical * 15 + high * 8 + medium * 3
     security_score = max(0, 100 - penalty)
+
+    trend_labels, trend_counts = build_trend(days=7)
+    recent_incidents = Incident.query.order_by(Incident.created_at.desc()).limit(10).all()
+
+    top_attacks = [
+        {"attack_type": row[0], "count": row[1]}
+        for row in db.session.query(Incident.attack_type, func.count(Incident.id))
+        .group_by(Incident.attack_type)
+        .order_by(func.count(Incident.id).desc())
+        .limit(5)
+        .all()
+    ]
+
+    severity_rows = (
+        db.session.query(Incident.severity, func.count(Incident.id))
+        .group_by(Incident.severity)
+        .all()
+    )
+    severity_counts = {row[0]: row[1] for row in severity_rows}
 
     return render_template(
         "home.html",
@@ -188,31 +290,124 @@ def dashboard_home():
         critical_incidents=critical,
         blocked_count=blocked,
         security_score=security_score,
-        mode=MODE,
-        target=TARGET_URL,
+        mode=current_app.config["WEBSENTINEL_MODE"],
+        target=current_app.config["WEBSENTINEL_TARGET"],
+        uptime=format_uptime(APP_STARTED_AT),
+        top_attacks=top_attacks,
+        severity_counts=severity_counts,
+        trend_labels=trend_labels,
+        trend_counts=trend_counts,
+        recent_incidents=recent_incidents,
+        active_page="home",
     )
 
 
-@app.route("/websentinel/live-monitor")
+@websentinel_bp.route("/live-monitor")
 def dashboard_live_monitor():
     recent = RequestModel.query.order_by(RequestModel.id.desc()).limit(50).all()
-    return render_template("live_monitor.html", requests=recent)
+    attack_types = [row[0] for row in db.session.query(Incident.attack_type).distinct().all()]
+    return render_template(
+        "live_monitor.html",
+        requests=recent,
+        attack_types=sorted(attack_types),
+        active_page="live-monitor",
+        refresh_interval=3000,
+    )
 
 
-@app.route("/websentinel/incidents")
+@websentinel_bp.route("/incidents")
 def dashboard_incidents():
-    all_incidents = Incident.query.order_by(Incident.id.desc()).all()
-    return render_template("incidents.html", incidents=all_incidents)
+    incidents = Incident.query.order_by(Incident.id.desc()).limit(200).all()
+    return render_template("incidents.html", incidents=incidents, active_page="incidents")
 
 
-@app.route("/websentinel/analytics")
-def dashboard_analytics():
-    return render_template("analytics.html")
+@websentinel_bp.route("/api/stats")
+def api_stats():
+    total_requests = RequestModel.query.count()
+    total_incidents = Incident.query.count()
+    critical = Incident.query.filter_by(severity="Critical").count()
+    high = Incident.query.filter_by(severity="High").count()
+    medium = Incident.query.filter_by(severity="Medium").count()
+    low = Incident.query.filter_by(severity="Low").count()
+    blocked = Incident.query.filter_by(status="Blocked").count()
+    penalty = critical * 15 + high * 8 + medium * 3
+    security_score = max(0, 100 - penalty)
+
+    return jsonify({
+        "total_requests": total_requests,
+        "total_incidents": total_incidents,
+        "critical": critical,
+        "high": high,
+        "medium": medium,
+        "low": low,
+        "blocked": blocked,
+        "security_score": security_score,
+        "mode": current_app.config["WEBSENTINEL_MODE"],
+        "target": current_app.config["WEBSENTINEL_TARGET"],
+        "uptime": format_uptime(APP_STARTED_AT),
+    })
 
 
-@app.route("/websentinel/api/attack-distribution")
+@websentinel_bp.route("/api/requests")
+def api_requests():
+    limit = min(int(request.args.get("limit", 50)), 200)
+    recent = RequestModel.query.order_by(RequestModel.id.desc()).limit(limit).all()
+    return jsonify([request_to_dict(r) for r in recent])
+
+
+@websentinel_bp.route("/api/incidents")
+def api_incidents():
+    query = Incident.query
+    search = request.args.get("q")
+    severity = request.args.get("severity")
+    status = request.args.get("status")
+    attack_type = request.args.get("attack_type")
+
+    if search:
+        query = query.join(RequestModel).filter(
+            or_(
+                Incident.attack_type.ilike(f"%{search}%"),
+                Incident.evidence.ilike(f"%{search}%"),
+                RequestModel.ip.ilike(f"%{search}%"),
+                RequestModel.url.ilike(f"%{search}%"),
+            )
+        )
+    if severity:
+        query = query.filter_by(severity=severity)
+    if status:
+        query = query.filter_by(status=status)
+    if attack_type:
+        query = query.filter_by(attack_type=attack_type)
+
+    incidents = query.order_by(Incident.id.desc()).limit(200).all()
+    return jsonify([
+        {
+            "incident_code": i.incident_code,
+            "attack_type": i.attack_type,
+            "severity": i.severity,
+            "status": i.status,
+            "confidence": i.confidence,
+            "risk_score": i.risk_score,
+            "ip": i.request.ip if i.request else None,
+            "path": i.request.url if i.request else None,
+            "timestamp": i.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "evidence": i.evidence,
+            "recommendation": i.recommendation,
+            "mitre_technique": i.mitre_technique,
+        }
+        for i in incidents
+    ])
+
+
+@websentinel_bp.route("/api/trend")
+def api_trend():
+    days = min(max(int(request.args.get("days", 7)), 1), 30)
+    labels, counts = build_trend(days=days)
+    return jsonify({"labels": labels, "counts": counts})
+
+
+@websentinel_bp.route("/api/attack-distribution")
 def api_attack_distribution():
-    from sqlalchemy import func
     rows = (
         db.session.query(Incident.attack_type, func.count(Incident.id))
         .group_by(Incident.attack_type)
@@ -221,21 +416,107 @@ def api_attack_distribution():
     return jsonify({"labels": [r[0] for r in rows], "counts": [r[1] for r in rows]})
 
 
+@websentinel_bp.route("/analytics")
+def dashboard_analytics():
+    severity_rows = (
+        db.session.query(Incident.severity, func.count(Incident.id))
+        .group_by(Incident.severity)
+        .all()
+    )
+    severity_counts = {row[0]: row[1] for row in severity_rows}
+
+    top_sources = [
+        {
+            "ip": row[0],
+            "count": row[1],
+            "last_seen": row[2].strftime("%Y-%m-%d %H:%M:%S") if row[2] else "N/A",
+        }
+        for row in (
+            db.session.query(
+                RequestModel.ip,
+                func.count(Incident.id),
+                func.max(Incident.created_at),
+            )
+            .join(Incident)
+            .group_by(RequestModel.ip)
+            .order_by(func.count(Incident.id).desc())
+            .limit(10)
+            .all()
+        )
+    ]
+
+    top_paths = [
+        {"path": row[0], "count": row[1]}
+        for row in (
+            db.session.query(RequestModel.url, func.count(Incident.id))
+            .join(Incident)
+            .group_by(RequestModel.url)
+            .order_by(func.count(Incident.id).desc())
+            .limit(10)
+            .all()
+        )
+    ]
+
+    trend_labels, trend_counts = build_trend(days=30)
+
+    return render_template(
+        "analytics.html",
+        severity_counts=severity_counts,
+        top_sources=top_sources,
+        top_paths=top_paths,
+        trend_labels=trend_labels,
+        trend_counts=trend_counts,
+        active_page="analytics",
+    )
+
+
+
+
 # ---------------------------------------------------------------------
 # THE PROXY — catch-all route. Registered last; Werkzeug's routing
 # matches the more specific /websentinel/* rules above regardless of
 # declaration order, so this never shadows the dashboard.
+# 
+# Detection happens in two phases:
+# 1. PRE-FORWARD: Request-based detectors (SQL, XSS, Traversal, Enumeration)
+#    run BEFORE forwarding so blocking can happen early.
+# 2. POST-RESPONSE: Response-based detectors (Brute Force) run AFTER 
+#    receiving upstream response with status_code.
+# 
+# This allows early blocking while still capturing response-dependent attacks.
 # ---------------------------------------------------------------------
-@app.route("/", defaults={"path": ""}, methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-@app.route("/<path:path>", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 def proxy(path):
     data, findings = inspect_request()
     scored_findings = [calculate_risk(dict(f)) for f in findings]
-    should_block = MODE == "protect" and any(
+    proxy_mode = current_app.config["WEBSENTINEL_MODE"]
+    target_url = current_app.config["WEBSENTINEL_TARGET"]
+    should_block = proxy_mode == "protect" and any(
         f["severity"] in BLOCK_SEVERITIES for f in scored_findings
     )
 
-    if should_block:
+    # A known repeat brute-force offender (already over the threshold from
+    # prior requests) gets blocked here, before forwarding — this is what
+    # actually stops an ongoing attack rather than just logging it, since
+    # the real detect() below can't run until AFTER the upstream response.
+    brute_force_repeat_offender = (
+        proxy_mode == "protect"
+        and brute_force.should_preblock(data["url"], data["ip"])
+    )
+
+    if should_block or brute_force_repeat_offender:
+        if brute_force_repeat_offender and not should_block:
+            findings = findings + [calculate_risk({
+                "attack_type": "Brute Force",
+                "confidence": "High",
+                "evidence": f"Repeat offender: {data['ip']} already exceeded the "
+                             f"failed-login threshold on this endpoint",
+                "mitre_technique": "T1110",
+                "recommendation": (
+                    "Implement account lockout or exponential backoff after repeated "
+                    "failures, add CAPTCHA after N attempts, and enforce rate limiting "
+                    "per IP on authentication endpoints."
+                ),
+            })]
         persist_request_and_incidents(data, findings, status_code=403, blocked=True)
         return Response(
             "<h1>403 Forbidden</h1><p>Request blocked by WebSentinel — "
@@ -245,7 +526,7 @@ def proxy(path):
         )
 
     # --- Forward the request upstream to the real website ---
-    upstream_url = f"{TARGET_URL}/{path}"
+    upstream_url = f"{target_url}/{path}"
     forward_headers = {
         k: v for k, v in request.headers.items()
         if k.lower() not in HOP_BY_HOP_HEADERS and k.lower() != "host"
@@ -267,6 +548,14 @@ def proxy(path):
         return Response(f"<h1>502 Bad Gateway</h1><p>Could not reach target: {e}</p>",
                          status=502, mimetype="text/html")
 
+    # --- POST-RESPONSE DETECTION: Brute Force
+    # Now that we have the upstream response status code, run brute force detection.
+    data_with_status = dict(data)
+    data_with_status["status_code"] = upstream_response.status_code
+    brute_force_finding = brute_force.detect(data_with_status)
+    if brute_force_finding:
+        findings.append(brute_force_finding)
+
     persist_request_and_incidents(data, findings, status_code=upstream_response.status_code, blocked=False)
 
     response_headers = [
@@ -276,17 +565,24 @@ def proxy(path):
     return Response(upstream_response.content, upstream_response.status_code, response_headers)
 
 
+# Module-level app — this is what `gunicorn proxy_app:app` imports directly,
+# and what running `python proxy_app.py` below also serves. Must be created
+# via create_app() so the blueprint, database, and config are all wired up —
+# a bare `Flask(__name__)` here would have no routes registered at all.
+app = create_app()
+
+
 if __name__ == "__main__":
     # Plain HTTP, for local development/testing only. For a real deployment
     # with HTTPS, don't run this file directly — use Gunicorn instead and
     # let it terminate SSL (see README: "Running in production with
-    # Gunicorn + SSL"). Gunicorn imports the same `app` object below, so
+    # Gunicorn + SSL"). Gunicorn imports the same `app` object above, so
     # nothing in this file needs to change between the two.
     port = int(os.environ.get("WEBSENTINEL_PORT", 8080))
 
     print(f"WebSentinel Reverse Proxy starting (dev server — use Gunicorn for production/SSL)")
-    print(f"  Mode        : {MODE}  ({'blocking Critical/High attacks' if MODE == 'protect' else 'monitoring only, nothing blocked'})")
-    print(f"  Target site : {TARGET_URL}")
+    print(f"  Mode        : {app.config['WEBSENTINEL_MODE']}  ({'blocking Critical/High attacks' if app.config['WEBSENTINEL_MODE'] == 'protect' else 'monitoring only, nothing blocked'})")
+    print(f"  Target site : {app.config['WEBSENTINEL_TARGET']}")
     print(f"  Proxy URL   : http://127.0.0.1:{port}")
     print(f"  Dashboard   : http://127.0.0.1:{port}/websentinel/")
 
