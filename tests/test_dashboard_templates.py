@@ -5,7 +5,9 @@ from proxy_app import create_app
 
 # ---------- existing dashboard tests ----------
 def test_dashboard_routes_render_templates():
-    app = create_app(database_uri="sqlite:///:memory:", mode="detect", target_url="http://127.0.0.1:9000")
+    app = create_app(database_uri="sqlite:///:memory:", target_url="http://127.0.0.1:9000")
+    with app.app_context():
+        db.create_all()
     with app.app_context():
         sample_request = Request(
             ip="192.0.2.1",
@@ -35,6 +37,7 @@ def test_dashboard_routes_render_templates():
         db.session.commit()
 
     client = app.test_client()
+    client.post("/websentinel/login", data={"username": "testadmin", "password": "testpass123"})
 
     home_resp = client.get('/websentinel/')
     assert home_resp.status_code == 200
@@ -64,7 +67,9 @@ def test_dashboard_routes_render_templates():
 
 # ---------- new test: brute‑force blocking ----------
 def test_brute_force_blocking():
-    app = create_app(database_uri="sqlite:///:memory:", mode="protect", target_url="http://dummy")
+    app = create_app(database_uri="sqlite:///:memory:", target_url="http://dummy")
+    with app.app_context():
+        db.create_all()
     client = app.test_client()
 
     with patch('requests.request') as mock_request:

@@ -1,0 +1,26 @@
+{
+    "T1190": {
+        "code": "A03:2021",
+        "name": "Injection"
+    },
+    "T1059.007": {
+        "code": "A03:2021",
+        "name": "Injection"
+    },
+    "T1083": {
+        "code": "A01:2021",
+        "name": "Broken Access Control"
+    },
+    "T1110": {
+        "code": "A07:2021",
+        "name": "Identification and Authentication Failures"
+    },
+    "T1595.003": {
+        "code": "A01:2021",
+        "name": "Broken Access Control"
+    },
+    "T1059": {
+        "code": "A03:2021",
+        "name": "Injection"
+    }
+}

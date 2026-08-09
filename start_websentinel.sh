@@ -1,25 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PORT="${WEBSENTINEL_PORT:-8443}"
-CERT_PATH="${SSL_CERT_PATH:-cert.pem}"
-KEY_PATH="${SSL_KEY_PATH:-key.pem}"
+PORT="${WEBSENTINEL_PORT:-8080}"
 TARGET="${WEBSENTINEL_TARGET:-http://127.0.0.1:9000}"
-MODE="${WEBSENTINEL_MODE:-detect}"
 
-if [[ ! -f "$CERT_PATH" || ! -f "$KEY_PATH" ]]; then
-  echo "Generating self-signed TLS certificate pair..."
-  openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
-    -keyout "$KEY_PATH" -out "$CERT_PATH" -subj "/CN=localhost" >/dev/null 2>&1
+# --- Pre-flight: fail fast if the port is already in use ---
+if ss -tlnp "sport = :$PORT" 2>/dev/null | grep -q ":$PORT "; then
+  echo "ERROR: Port $PORT is already in use — stop the other process first" >&2
+  exit 1
 fi
 
-echo "Starting WebSentinel with Gunicorn HTTPS termination..."
-echo "  Mode: $MODE"
-echo "  Target: $TARGET"
-echo "  HTTPS port: $PORT"
+# --- Auto-apply database migrations (single source of truth for the schema) ---
+echo "Applying database migrations..."
+export FLASK_APP=proxy_app.py
+if ! python -m flask db upgrade; then
+  echo "ERROR: Database migration failed — refusing to start with a broken schema." >&2
+  exit 1
+fi
 
-echo "  Certificate: $CERT_PATH"
-echo "  Private key: $KEY_PATH"
+echo "Starting WebSentinel..."
+echo "  Target:  $TARGET"
+echo "  Proxy:   http://0.0.0.0:$PORT"
+echo "  Dashboard: http://0.0.0.0:$PORT/websentinel/"
+echo ""
+echo "Press Ctrl+C to stop."
 
-WEBSENTINEL_TARGET="$TARGET" WEBSENTINEL_MODE="$MODE" \
-exec gunicorn --certfile="$CERT_PATH" --keyfile="$KEY_PATH" --bind 0.0.0.0:"$PORT" proxy_app:app
+exec gunicorn --bind 0.0.0.0:"$PORT" proxy_app:app

@@ -12,17 +12,15 @@ to follow when you add new detectors later (e.g., SSRF, LFI).
 
 import re
 
-# Each tuple is (compiled regex, human-readable evidence string).
-# Patterns are intentionally broad for a rule-based v1 — expect some false
-# positives; that's a documented limitation (Section 15 of the project doc),
-# not a bug to over-engineer away in a 20-day scope.
+# Each tuple is (compiled regex, human-readable evidence string, confidence).
+# Confidence is per-pattern — not all SQL Injection signals are equally strong.
 SQLI_PATTERNS = [
-    (re.compile(r"(\bunion\b.{0,20}\bselect\b)", re.IGNORECASE), "UNION SELECT keyword sequence detected"),
-    (re.compile(r"(\bor\b\s+\d+\s*=\s*\d+)", re.IGNORECASE), "Boolean tautology (OR 1=1 style) detected"),
-    (re.compile(r"(--|#|/\*)"), "SQL comment sequence detected"),
-    (re.compile(r"(\binformation_schema\b)", re.IGNORECASE), "information_schema enumeration attempt detected"),
-    (re.compile(r"(\bdrop\b\s+\btable\b)", re.IGNORECASE), "DROP TABLE keyword detected"),
-    (re.compile(r"('.*(\bor\b|\band\b).*')", re.IGNORECASE), "Quoted boolean injection pattern detected"),
+    (re.compile(r"(\bunion\b.{0,20}\bselect\b)", re.IGNORECASE), "UNION SELECT keyword sequence detected", "Very High"),
+    (re.compile(r"(\bor\b\s+\d+\s*=\s*\d+)", re.IGNORECASE), "Boolean tautology (OR 1=1 style) detected", "High"),
+    (re.compile(r"(--|#|/\*)"), "SQL comment sequence detected", "Medium"),
+    (re.compile(r"(\binformation_schema\b)", re.IGNORECASE), "information_schema enumeration attempt detected", "High"),
+    (re.compile(r"(\bdrop\b\s+\btable\b)", re.IGNORECASE), "DROP TABLE keyword detected", "High"),
+    (re.compile(r"('.*(\bor\b|\band\b).*')", re.IGNORECASE), "Quoted boolean injection pattern detected", "High"),
 ]
 
 
@@ -31,13 +29,15 @@ def detect(data: dict):
     data must contain 'payload' (query string + body, already URL-decoded).
     Returns an incident dict if matched, otherwise None.
     """
-    payload = data.get("payload", "") or ""
+    from utils.normalize import normalize
 
-    for pattern, evidence in SQLI_PATTERNS:
+    payload = normalize(data.get("payload", "") or "")
+
+    for pattern, evidence, confidence in SQLI_PATTERNS:
         if pattern.search(payload):
             return {
                 "attack_type": "SQL Injection",
-                "confidence": "High",
+                "confidence": confidence,
                 "evidence": evidence,
                 "mitre_technique": "T1190",  # Exploit Public-Facing Application
                 "recommendation": (

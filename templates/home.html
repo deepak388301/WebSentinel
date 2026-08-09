@@ -6,7 +6,6 @@
         <p class="text-muted mb-0">Snapshot of web traffic and security health for your protected target.</p>
     </div>
     <div class="d-flex flex-column text-end">
-        <span class="badge bg-{{ 'danger' if mode == 'protect' else 'info' }} mb-2">Mode: {{ mode|upper }}</span>
         <span class="text-muted">Protecting: <code>{{ target }}</code></span>
         <span class="text-muted">Uptime: {{ uptime }}</span>
     </div>
@@ -14,48 +13,48 @@
 
 <div class="row g-3">
     <div class="col-sm-6 col-xl-3">
-        <div class="card bg-dark text-light p-3 h-100">
+        <div class="card bg-light-card text-dark p-3 h-100">
             <div class="d-flex align-items-center justify-content-between mb-2">
                 <span>Total Requests</span>
                 <span class="badge bg-primary">All time</span>
             </div>
-            <div class="fs-1 fw-bold">{{ total_requests }}</div>
+            <div id="statTotalRequests" class="fs-1 fw-bold">{{ total_requests }}</div>
         </div>
     </div>
     <div class="col-sm-6 col-xl-3">
-        <div class="card bg-dark text-light p-3 h-100">
+        <div class="card bg-light-card text-dark p-3 h-100">
             <div class="d-flex align-items-center justify-content-between mb-2">
                 <span>Total Incidents</span>
-                <span class="badge bg-warning">Detected</span>
+                <span class="badge bg-warning text-dark">Detected</span>
             </div>
-            <div class="fs-1 fw-bold">{{ total_incidents }}</div>
+            <div id="statTotalIncidents" class="fs-1 fw-bold">{{ total_incidents }}</div>
         </div>
     </div>
     <div class="col-sm-6 col-xl-3">
-        <div class="card bg-dark text-light p-3 h-100">
+        <div class="card bg-light-card text-dark p-3 h-100">
             <div class="d-flex align-items-center justify-content-between mb-2">
                 <span>Critical Incidents</span>
                 <span class="badge bg-danger">Highest</span>
             </div>
-            <div class="fs-1 fw-bold">{{ critical_incidents }}</div>
+            <div id="statCriticalIncidents" class="fs-1 fw-bold">{{ critical_incidents }}</div>
         </div>
     </div>
     <div class="col-sm-6 col-xl-3">
-        <div class="card bg-dark text-light p-3 h-100">
+        <div class="card bg-light-card text-dark p-3 h-100">
             <div class="d-flex align-items-center justify-content-between mb-2">
                 <span>Security Score</span>
-                <span class="badge bg-{{ 'success' if security_score >= 80 else 'warning' if security_score >= 50 else 'danger' }}">
+                <span id="statScoreBadge" class="badge bg-{{ 'success' if security_score >= 80 else 'warning' if security_score >= 50 else 'danger' }}">
                     {{ 'Healthy' if security_score >= 80 else 'Watch' if security_score >= 50 else 'At Risk' }}
                 </span>
             </div>
-            <div class="fs-1 fw-bold">{{ security_score }} / 100</div>
+            <div id="statSecurityScore" class="fs-1 fw-bold">{{ security_score }} / 100</div>
         </div>
     </div>
 </div>
 
 <div class="row g-3 mt-4">
     <div class="col-lg-8">
-        <div class="card bg-dark border-secondary-subtle p-4 chart-card">
+        <div class="card bg-light-card text-dark p-4 chart-card">
             <div class="d-flex justify-content-between align-items-start mb-3">
                 <div>
                     <h5 class="mb-1">Attack Trend</h5>
@@ -67,12 +66,12 @@
         </div>
     </div>
     <div class="col-lg-4">
-        <div class="card bg-dark border-secondary-subtle p-4 h-100">
+        <div class="card bg-light-card text-dark p-4 h-100">
             <h5 class="mb-3">Top Attack Types</h5>
             {% if top_attacks %}
                 <div class="list-group list-group-flush">
                     {% for attack in top_attacks %}
-                        <div class="list-group-item bg-transparent text-light d-flex justify-content-between align-items-center border-secondary-subtle py-3 px-0">
+                        <div class="list-group-item bg-transparent text-dark d-flex justify-content-between align-items-center border-bottom py-3 px-0">
                             <span>{{ attack.attack_type }}</span>
                             <span class="badge bg-primary rounded-pill">{{ attack.count }}</span>
                         </div>
@@ -83,7 +82,7 @@
             {% endif %}
         </div>
 
-        <div class="card bg-dark border-secondary-subtle p-4 mt-3">
+        <div class="card bg-light-card text-dark p-4 mt-3">
             <h5 class="mb-3">Severity Snapshot</h5>
             <div class="d-flex justify-content-between mb-2">
                 <span>Critical</span><strong>{{ severity_counts.get('Critical', 0) }}</strong>
@@ -101,17 +100,17 @@
     </div>
 </div>
 
-<div class="card bg-dark border-secondary-subtle p-4 mt-4">
+<div class="card bg-light-card text-dark p-4 mt-4">
     <div class="d-flex justify-content-between align-items-center mb-3">
         <div>
             <h5 class="mb-1">Recent Incidents</h5>
             <p class="text-muted mb-0">Last 10 security events.</p>
         </div>
-        <a href="/websentinel/incidents" class="btn btn-sm btn-outline-light">View all</a>
+        <a href="/websentinel/incidents" class="btn btn-sm btn-outline-dark">View all</a>
     </div>
     {% if recent_incidents %}
     <div class="table-responsive">
-        <table class="table table-dark table-striped align-middle mb-0">
+        <table class="table table-striped align-middle mb-0">
             <thead>
                 <tr>
                     <th>Time</th>
@@ -124,7 +123,7 @@
             <tbody>
                 {% for incident in recent_incidents %}
                 <tr>
-                    <td>{{ incident.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td>{{ incident.created_at | ist }}</td>
                     <td>{{ incident.attack_type }}</td>
                     <td>
                         <span class="badge bg-{{ 'danger' if incident.severity == 'Critical' else 'warning' if incident.severity == 'High' else 'secondary' if incident.severity == 'Medium' else 'info' }}">
@@ -132,7 +131,7 @@
                         </span>
                     </td>
                     <td>
-                        <span class="badge bg-{{ 'success' if incident.status == 'Closed' else 'warning' if incident.status == 'Reviewed' else 'danger' }}">
+                        <span class="badge bg-{{ 'danger' if incident.status == 'Blocked' else 'warning text-dark' }}">
                             {{ incident.status }}
                         </span>
                     </td>
@@ -147,8 +146,32 @@
     {% endif %}
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script>
+<script nonce="{{ csp_nonce }}">
+const refreshInterval = 3000;
+
+function updateScoreBadge(score) {
+    const badge = document.getElementById('statScoreBadge');
+    badge.className = 'badge bg-' + (score >= 80 ? 'success' : score >= 50 ? 'warning' : 'danger');
+    badge.textContent = score >= 80 ? 'Healthy' : score >= 50 ? 'Watch' : 'At Risk';
+}
+
+function fetchStats() {
+    fetch('/websentinel/api/stats')
+        .then(res => res.json())
+        .then(data => {
+            document.getElementById('statTotalRequests').textContent = data.total_requests;
+            document.getElementById('statTotalIncidents').textContent = data.total_incidents;
+            document.getElementById('statCriticalIncidents').textContent = data.critical;
+            document.getElementById('statSecurityScore').textContent = data.security_score + ' / 100';
+            updateScoreBadge(data.security_score);
+        })
+        .catch(() => {});
+}
+
+setInterval(fetchStats, refreshInterval);
+</script>
+<script src="{{ url_for('static', filename='vendor/chart.min.js') }}"></script>
+<script nonce="{{ csp_nonce }}">
 const trendChart = new Chart(document.getElementById('trendChart'), {
     type: 'line',
     data: {

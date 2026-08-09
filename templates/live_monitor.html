@@ -6,29 +6,36 @@
         <p class="text-muted mb-0">Streaming request traffic with attack indicators and filters.</p>
     </div>
     <div class="text-end">
-        <small class="text-muted">Auto-refresh every {{ refresh_interval // 1000 }}s</small>
+        <label class="form-label mb-1 d-block">Auto-refresh</label>
+        <select id="refreshIntervalSelect" class="form-select form-select-sm">
+            <option value="2000">Every 2s</option>
+            <option value="3000" selected>Every 3s</option>
+            <option value="5000">Every 5s</option>
+            <option value="10000">Every 10s</option>
+            <option value="0">Off</option>
+        </select>
     </div>
 </div>
 
 <div class="row g-3 mb-4">
     <div class="col-lg-8">
-        <div class="card bg-dark border-secondary-subtle p-4 h-100">
+        <div class="card bg-light-card text-dark p-4 h-100">
             <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
                 <span class="badge bg-secondary">Request Feed</span>
                 <span class="badge bg-info">Latest 50</span>
             </div>
             <div class="row g-2 align-items-center">
                 <div class="col-12 col-md-4">
-                    <label class="form-label text-light">Show</label>
-                    <select id="attackFilter" class="form-select form-select-sm bg-black text-light border-secondary-subtle">
+                    <label class="form-label">Show</label>
+                    <select id="attackFilter" class="form-select form-select-sm">
                         <option value="all">All Requests</option>
                         <option value="attacks">Attacks Only</option>
                         <option value="clean">Clean Only</option>
                     </select>
                 </div>
                 <div class="col-12 col-md-4">
-                    <label class="form-label text-light">Attack Type</label>
-                    <select id="attackTypeFilter" class="form-select form-select-sm bg-black text-light border-secondary-subtle">
+                    <label class="form-label">Attack Type</label>
+                    <select id="attackTypeFilter" class="form-select form-select-sm">
                         <option value="all">All Types</option>
                         {% for attack_type in attack_types %}
                         <option value="{{ attack_type }}">{{ attack_type }}</option>
@@ -36,30 +43,30 @@
                     </select>
                 </div>
                 <div class="col-12 col-md-4">
-                    <label class="form-label text-light">Refresh</label>
-                    <button id="refreshNow" class="btn btn-sm btn-outline-light w-100">Refresh Now</button>
+                    <label class="form-label">Refresh</label>
+                    <button id="refreshNow" class="btn btn-sm btn-outline-dark w-100">Refresh Now</button>
                 </div>
             </div>
             <canvas id="rateChart" class="mt-4" height="120"></canvas>
         </div>
     </div>
     <div class="col-lg-4">
-        <div class="card bg-dark border-secondary-subtle p-4 h-100">
+        <div class="card bg-light-card text-dark p-4 h-100">
             <h5 class="mb-3">Latest Request Summary</h5>
             <div class="mb-3">
                 <strong id="totalRequests">0</strong> requests
             </div>
             <div class="mb-2 text-muted">Attack indicators show whether a request triggered detection.</div>
-            <ul class="list-group list-group-flush text-light" id="liveSummary">
-                <li class="list-group-item bg-transparent border-secondary-subtle py-2">Loading recent data…</li>
+            <ul class="list-group list-group-flush" id="liveSummary">
+                <li class="list-group-item py-2">Loading recent data…</li>
             </ul>
         </div>
     </div>
 </div>
 
-<div class="card bg-dark border-secondary-subtle p-4">
+<div class="card bg-light-card text-dark p-4">
     <div class="table-responsive">
-        <table class="table table-dark table-striped align-middle mb-0">
+        <table class="table table-striped align-middle mb-0">
             <thead>
                 <tr>
                     <th>Time</th>
@@ -74,7 +81,7 @@
             <tbody id="requestsTable">
                 {% for r in requests %}
                 <tr>
-                    <td>{{ r.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td>{{ r.timestamp | ist }}</td>
                     <td>{{ r.ip }}</td>
                     <td><span class="badge bg-secondary">{{ r.method }}</span></td>
                     <td><code>{{ r.url }}</code></td>
@@ -94,11 +101,12 @@
     </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script>
+<script src="{{ url_for('static', filename='vendor/chart.min.js') }}"></script>
+<script nonce="{{ csp_nonce }}">
 const requestChartCtx = document.getElementById('rateChart');
 let requestChart;
-const refreshInterval = {{ refresh_interval }};
+let refreshTimer = null;
+const refreshIntervalSelect = document.getElementById('refreshIntervalSelect');
 const attackFilter = document.getElementById('attackFilter');
 const attackTypeFilter = document.getElementById('attackTypeFilter');
 const refreshNowButton = document.getElementById('refreshNow');
@@ -107,20 +115,29 @@ const totalRequestsEl = document.getElementById('totalRequests');
 const liveSummary = document.getElementById('liveSummary');
 let lastRequestData = [];
 
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>'"]/g, tag => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+    }[tag]));
+}
+
 function formatRequestRow(item) {
     const badgeColor = item.status_code < 400 ? 'success' : item.status_code < 500 ? 'warning' : 'danger';
     const attackIcon = item.attack ? '⚠️' : '✅';
     const severity = item.severity || 'Clean';
     const severityClass = item.attack ? (item.severity === 'Critical' ? 'danger' : item.severity === 'High' ? 'warning' : 'secondary') : 'success';
+    // Every field below can originate from an attacker-controlled request
+    // (path, ip via spoofed headers, etc.) and is rendered via innerHTML,
+    // so everything must be escaped — not just the "obviously textual" ones.
     return `
         <tr>
-            <td>${item.timestamp}</td>
-            <td>${item.ip}</td>
-            <td><span class="badge bg-secondary">${item.method}</span></td>
-            <td><code>${item.path}</code></td>
-            <td><span class="badge bg-${badgeColor}">${item.status_code}</span></td>
+            <td>${escapeHtml(item.timestamp)}</td>
+            <td>${escapeHtml(item.ip)}</td>
+            <td><span class="badge bg-secondary">${escapeHtml(item.method)}</span></td>
+            <td><code>${escapeHtml(item.path)}</code></td>
+            <td><span class="badge bg-${badgeColor}">${escapeHtml(item.status_code)}</span></td>
             <td>${attackIcon}</td>
-            <td><span class="badge bg-${severityClass}">${severity}</span></td>
+            <td><span class="badge bg-${severityClass}">${escapeHtml(severity)}</span></td>
         </tr>
     `;
 }
@@ -129,9 +146,9 @@ function updateSummary(items) {
     totalRequestsEl.textContent = items.length;
     const attackCount = items.filter(item => item.attack).length;
     liveSummary.innerHTML = `
-        <li class="list-group-item bg-transparent border-secondary-subtle py-2">Attacks: <strong>${attackCount}</strong></li>
-        <li class="list-group-item bg-transparent border-secondary-subtle py-2">Clean: <strong>${items.length - attackCount}</strong></li>
-        <li class="list-group-item bg-transparent border-secondary-subtle py-2">Latest type: <strong>${items[0]?.attack_type || 'None'}</strong></li>
+        <li class="list-group-item py-2">Attacks: <strong>${attackCount}</strong></li>
+        <li class="list-group-item py-2">Clean: <strong>${items.length - attackCount}</strong></li>
+        <li class="list-group-item py-2">Latest type: <strong>${escapeHtml(items[0]?.attack_type || 'None')}</strong></li>
     `;
 }
 
@@ -187,10 +204,17 @@ function fetchRequests() {
         });
 }
 
+function applyRefreshInterval() {
+    if (refreshTimer) clearInterval(refreshTimer);
+    const ms = parseInt(refreshIntervalSelect.value, 10);
+    if (ms > 0) refreshTimer = setInterval(fetchRequests, ms);
+}
+
 attackFilter.addEventListener('change', () => renderRequests(lastRequestData));
 attackTypeFilter.addEventListener('change', () => renderRequests(lastRequestData));
 refreshNowButton.addEventListener('click', () => fetchRequests());
+refreshIntervalSelect.addEventListener('change', applyRefreshInterval);
 fetchRequests();
-setInterval(fetchRequests, refreshInterval);
+applyRefreshInterval();
 </script>
 {% endblock %}

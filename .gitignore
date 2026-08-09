@@ -1,11 +1,45 @@
-instance/
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.db
+*.so
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
 venv/
 .venv/
+env/
+
+# Environment / secrets
 .env
-server.log
+.env.*
+*.pem
+
+# Google OAuth (Gmail alerting) — never commit tokens or client secrets
+credentials.json
+token.json
+
+# Database
+*.db
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Testing / coverage
 .pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Logs
+server.log
+
+# Instance / uploads
+instance/

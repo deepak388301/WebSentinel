@@ -4,40 +4,52 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>WebSentinel Dashboard</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
+    <link rel="icon" type="image/jpeg" href="{{ url_for('static', filename='img/favicon.jpeg') }}">
+    <link href="{{ url_for('static', filename='vendor/bootstrap.min.css') }}" rel="stylesheet">
+    <style nonce="{{ csp_nonce }}">
         body {
             min-height: 100vh;
-            background: #060b17;
+            background-color: #0d1117;
             color: #f2f6fb;
+            position: relative;
+            z-index: 0;
+        }
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: url("{{ url_for('static', filename='img/background.jpg') }}") repeat;
+            background-size: 400px 400px;
+            opacity: 0.12;
+            pointer-events: none;
+            z-index: -1;
         }
         .navbar-brand {
             letter-spacing: 0.04em;
         }
-        .nav-link.active {
+        .navbar-light .nav-link.active {
             font-weight: 700;
-            color: #ffffff !important;
+            color: #000000 !important;
         }
         .card {
-            border: 1px solid rgba(255, 255, 255, 0.08);
-        }
-        .badge-soft {
-            color: #fff;
-            opacity: .85;
+            border: 1px solid rgba(0, 0, 0, 0.125);
         }
         .table td, .table th {
             vertical-align: middle;
         }
-        .filter-pill {
-            background: rgba(255, 255, 255, 0.06);
-        }
         .chart-card {
             min-height: 320px;
+        }
+        .card, .list-group-item, .table {
+            color: #212529;
+        }
+        .bg-light-card {
+            background-color: #ffffff;
         }
     </style>
 </head>
 <body>
-    <nav class="navbar navbar-expand-lg navbar-dark bg-black border-bottom border-secondary-subtle">
+    <nav class="navbar navbar-expand-lg navbar-light bg-light border-bottom border-secondary">
         <div class="container-fluid">
             <a class="navbar-brand" href="/websentinel/">🛡 WebSentinel</a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu">
@@ -57,6 +69,12 @@
                     <li class="nav-item">
                         <a class="nav-link {% if active_page == 'analytics' %}active{% endif %}" href="/websentinel/analytics">Analytics</a>
                     </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if active_page == 'blocklist' %}active{% endif %}" href="/websentinel/blocklist">Blocklist</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if active_page == 'settings' %}active{% endif %}" href="/websentinel/settings">Settings</a>
+                    </li>
                 </ul>
             </div>
         </div>
@@ -70,6 +88,6 @@
         <small>WebSentinel Proxy Dashboard · Monitoring traffic and incident data in real time.</small>
     </footer>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='vendor/bootstrap.bundle.min.js') }}"></script>
 </body>
 </html>

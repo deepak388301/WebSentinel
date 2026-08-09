@@ -14,7 +14,9 @@ COMMON_SCANNER_PATHS = [
 
 
 def detect(data: dict):
-    url = (data.get("url", "") or "").lower()
+    from utils.normalize import normalize
+
+    url = normalize(data.get("url", "") or "")
 
     for path in COMMON_SCANNER_PATHS:
         if path in url:

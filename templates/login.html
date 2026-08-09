@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WebSentinel Login</title>
+    <link rel="icon" type="image/jpeg" href="{{ url_for('static', filename='img/favicon.jpeg') }}">
+    <link href="{{ url_for('static', filename='vendor/bootstrap.min.css') }}" rel="stylesheet">
+    <style nonce="{{ csp_nonce }}">
+        body {
+            min-height: 100vh;
+            background-color: #0d1117;
+            color: #f2f6fb;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            z-index: 0;
+        }
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: url("{{ url_for('static', filename='img/background.jpg') }}") repeat;
+            background-size: 400px 400px;
+            opacity: 0.12;
+            pointer-events: none;
+            z-index: -1;
+        }
+        .login-card {
+            max-width: 400px;
+            width: 100%;
+            background: #ffffff;
+            border: 1px solid rgba(0, 0, 0, 0.125);
+            color: #212529;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card card shadow-lg">
+        <div class="card-body p-4">
+            <h3 class="card-title text-center mb-4">WebSentinel Login</h3>
+            {% if error %}
+            <div class="alert alert-danger" role="alert">{{ error }}</div>
+            {% endif %}
+            <form method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                <div class="mb-3">
+                    <label for="username" class="form-label">Username</label>
+                    <input type="text" class="form-control" id="username" name="username" required autofocus>
+                </div>
+                <div class="mb-3">
+                    <label for="password" class="form-label">Password</label>
+                    <input type="password" class="form-control" id="password" name="password" required>
+                </div>
+                <button type="submit" class="btn btn-primary w-100">Sign In</button>
+            </form>
+        </div>
+    </div>
+</body>
+</html>

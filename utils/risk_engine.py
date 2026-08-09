@@ -17,6 +17,7 @@ BASE_SCORES = {
 }
 
 CONFIDENCE_MODIFIER = {
+    "Very High": 20,
     "High": 10,
     "Medium": 0,
     "Low": -15,

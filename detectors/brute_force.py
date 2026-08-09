@@ -1,63 +1,89 @@
 """
 detectors/brute_force.py
 
-Brute Force detector — different shape from the other detectors because
-brute force isn't a single-request pattern, it's a BEHAVIOR over multiple
-requests. So instead of regex on one payload, we track failed attempts
-per IP in memory and flag once a threshold is crossed within a time window.
+Brute Force detector — tracks failed login attempts per IP in the database
+(fixed across all Gunicorn workers/processes). Flags once a threshold is
+crossed within a time window.
 
-Note: an in-memory dict resets when the Flask process restarts. That's an
-acceptable v1 limitation (documented) — Redis would fix this in the
-"Future Enhancements" phase (Section 16 of the project doc).
+Contract (unchanged from v1):
+    detect(data) -> dict | None
+    should_preblock(url, ip) -> bool
+
+Configuration (environment variables):
+    WEBSENTINEL_BRUTE_FORCE_STATUS_CODES  Comma-separated HTTP status codes
+                                          that count as a failed login attempt.
+                                          Default: 401,403
+    WEBSENTINEL_BRUTE_FORCE_LOGIN_PATHS   Comma-separated URL path substrings
+                                          that identify login endpoints.
+                                          Default: login,signin,auth,admin
 """
 
-import time
+import os
+from datetime import datetime, timedelta, timezone
 
 FAILURE_THRESHOLD = 5      # attempts
 TIME_WINDOW_SECONDS = 60   # within this many seconds
 
-# { ip: [timestamp1, timestamp2, ...] }  — only failed login timestamps are stored
-_failed_attempts = {}
+
+def _get_failure_status_codes():
+    raw = os.environ.get("WEBSENTINEL_BRUTE_FORCE_STATUS_CODES", "401,403")
+    try:
+        return tuple(int(c.strip()) for c in raw.split(",") if c.strip())
+    except (ValueError, TypeError):
+        return (401, 403)
+
+
+def _get_login_paths():
+    raw = os.environ.get("WEBSENTINEL_BRUTE_FORCE_LOGIN_PATHS", "login,signin,auth,admin")
+    return [p.strip().lower() for p in raw.split(",") if p.strip()]
 
 
 def _is_login_endpoint(url: str) -> bool:
-    # No leading slash on purpose — matches "/login", "/test-login",
-    # "/api/v1/auth" etc. Tighten this if it over-matches in your real app
-    # (e.g. a route like "/plugin-authors" would false-positive on "auth").
-    login_markers = ["login", "signin", "auth", "admin"]
-    return any(marker in url.lower() for marker in login_markers)
+    login_markers = _get_login_paths()
+    url_lower = url.lower()
+    return any(marker in url_lower for marker in login_markers)
+
+
+def _cleanup_expired():
+    """Remove attempts older than the time window to avoid unbounded growth."""
+    from database.models import db, LoginAttempt
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=TIME_WINDOW_SECONDS)
+    LoginAttempt.query.filter(LoginAttempt.timestamp < cutoff).delete()
+    db.session.commit()
+
+
+def _count_recent(ip: str) -> int:
+    """Count failed attempts from this IP within the rolling window."""
+    from database.models import LoginAttempt
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=TIME_WINDOW_SECONDS)
+    return LoginAttempt.query.filter(
+        LoginAttempt.ip == ip,
+        LoginAttempt.timestamp >= cutoff,
+    ).count()
 
 
 def should_preblock(url: str, ip: str) -> bool:
     """
-    Pre-forward check — used BEFORE the request is sent upstream, so
-    protect mode can actually block an ongoing brute-force attack instead
-    of only logging it after the fact.
-
-    detect() (below) can't run until the response status_code is known,
-    which means the request that TRIPS the threshold (e.g. the 5th failed
-    attempt) always reaches the real backend at least once — there's no
-    way to block a pattern before you've seen enough of it happen. But
-    every request AFTER that point is a known repeat offender: this
-    checks the already-recorded history (no new attempt is logged here)
+    Pre-forward check — used BEFORE the request is sent upstream.
+    Checks the already-recorded history (no new attempt is logged here)
     so attempt 6, 7, 8... can be blocked before ever reaching upstream.
     """
     if not _is_login_endpoint(url):
         return False
 
-    now = time.time()
-    timestamps = _failed_attempts.get(ip, [])
-    recent = [t for t in timestamps if now - t <= TIME_WINDOW_SECONDS]
-    return len(recent) >= FAILURE_THRESHOLD
+    _cleanup_expired()
+    return _count_recent(ip) >= FAILURE_THRESHOLD
 
 
 def detect(data: dict):
     """
     Expects data to contain: url, ip, status_code.
-    A "failed attempt" is treated as any request to a login-like endpoint
-    that returned 401/403/redirect-to-login. Adjust to your app's real
-    failure signal once you wire this to an actual /login route.
+    A "failed attempt" is any request to a login-like endpoint that
+    returned a status code matching WEBSENTINEL_BRUTE_FORCE_STATUS_CODES
+    (default: 401, 403).
     """
+    from database.models import db, LoginAttempt
+
     url = data.get("url", "") or ""
     ip = data.get("ip", "unknown")
     status_code = data.get("status_code")
@@ -65,23 +91,24 @@ def detect(data: dict):
     if not _is_login_endpoint(url):
         return None
 
-    if status_code not in (401, 403):
-        return None  # only count failed attempts, not successful logins
+    if status_code not in _get_failure_status_codes():
+        return None
 
-    now = time.time()
-    timestamps = _failed_attempts.setdefault(ip, [])
-    timestamps.append(now)
+    # Record the failed attempt
+    attempt = LoginAttempt(ip=ip, url=url)
+    db.session.add(attempt)
+    db.session.commit()
 
-    # Drop timestamps outside the rolling window before counting
-    _failed_attempts[ip] = [t for t in timestamps if now - t <= TIME_WINDOW_SECONDS]
+    _cleanup_expired()
+    count = _count_recent(ip)
 
-    if len(_failed_attempts[ip]) >= FAILURE_THRESHOLD:
+    if count >= FAILURE_THRESHOLD:
         return {
             "attack_type": "Brute Force",
-            "confidence": "High",
-            "evidence": f"{len(_failed_attempts[ip])} failed login attempts from {ip} "
+            "confidence": "Very High",
+            "evidence": f"{count} failed login attempts from {ip} "
                         f"within {TIME_WINDOW_SECONDS} seconds",
-            "mitre_technique": "T1110",  # Brute Force
+            "mitre_technique": "T1110",
             "recommendation": (
                 "Implement account lockout or exponential backoff after repeated "
                 "failures, add CAPTCHA after N attempts, and enforce rate limiting "

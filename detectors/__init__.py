@@ -7,10 +7,10 @@ type later, write a new module with a detect(data) -> dict|None function
 and add it to DETECTOR_MODULES below. Nothing else in the app needs to change.
 """
 
-from . import sql, xss, traversal, brute_force, enumeration
+from . import sql, xss, traversal, brute_force, enumeration, command_injection, nosql_injection, ssrf, xxe
 
-DETECTOR_MODULES = [sql, xss, traversal, brute_force, enumeration]
-PRE_FORWARD_DETECTORS = [sql, xss, traversal, enumeration]  # All except brute_force
+DETECTOR_MODULES = [sql, xss, traversal, brute_force, enumeration, command_injection, nosql_injection, ssrf, xxe]
+PRE_FORWARD_DETECTORS = [sql, xss, traversal, enumeration, command_injection, nosql_injection, ssrf, xxe]  # All except brute_force
 
 
 def run_pre_forward_detectors(data: dict):

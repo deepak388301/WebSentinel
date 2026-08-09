@@ -5,18 +5,21 @@
         <h3 class="mb-2">Incidents</h3>
         <p class="text-muted mb-0">Full incident history, searchable and filterable for faster triage.</p>
     </div>
-    <button id="exportCsv" class="btn btn-sm btn-outline-light">Export CSV</button>
+    <div class="btn-group btn-group-sm">
+        <button class="btn btn-outline-light" id="exportCsv">Download CSV</button>
+        <button class="btn btn-outline-light" id="exportJson">Download JSON</button>
+    </div>
 </div>
 
-<div class="card bg-dark border-secondary-subtle p-4 mb-4">
+<div class="card bg-light-card text-dark p-4 mb-4">
     <div class="row g-3">
         <div class="col-md-4">
-            <label class="form-label text-light">Search</label>
-            <input id="searchInput" type="search" class="form-control form-control-dark text-light bg-black border-secondary-subtle" placeholder="IP, attack type, path">
+            <label class="form-label">Search</label>
+            <input id="searchInput" type="search" class="form-control" placeholder="IP, attack type, path">
         </div>
         <div class="col-md-3">
-            <label class="form-label text-light">Severity</label>
-            <select id="severityFilter" class="form-select form-select-dark text-light bg-black border-secondary-subtle">
+            <label class="form-label">Severity</label>
+            <select id="severityFilter" class="form-select">
                 <option value="">All severities</option>
                 <option value="Critical">Critical</option>
                 <option value="High">High</option>
@@ -25,23 +28,22 @@
             </select>
         </div>
         <div class="col-md-3">
-            <label class="form-label text-light">Status</label>
-            <select id="statusFilter" class="form-select form-select-dark text-light bg-black border-secondary-subtle">
+            <label class="form-label">Status</label>
+            <select id="statusFilter" class="form-select">
                 <option value="">All statuses</option>
+                <option value="Blocked">Blocked</option>
                 <option value="Open">Open</option>
-                <option value="Reviewed">Reviewed</option>
-                <option value="Closed">Closed</option>
             </select>
         </div>
         <div class="col-md-2 d-flex align-items-end">
-            <button id="refreshIncidents" class="btn btn-outline-light w-100">Refresh</button>
+            <button id="refreshIncidents" class="btn btn-outline-dark w-100">Refresh</button>
         </div>
     </div>
 </div>
 
-<div class="card bg-dark border-secondary-subtle p-4">
+<div class="card bg-light-card text-dark p-4">
     <div class="table-responsive">
-        <table class="table table-dark table-striped align-middle mb-0">
+        <table class="table table-striped align-middle mb-0">
             <thead>
                 <tr>
                     <th>ID</th>
@@ -66,27 +68,40 @@
                     "risk_score": i.risk_score,
                     "ip": i.request.ip if i.request else "N/A",
                     "path": i.request.url if i.request else "N/A",
-                    "timestamp": i.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    "timestamp": "{{ i.created_at | ist }}",
                     "evidence": i.evidence,
                     "recommendation": i.recommendation,
                     "mitre_technique": i.mitre_technique,
+                    "mitre_name": get_mitre_info(i.mitre_technique),
+                    "owasp_technique": get_owasp_info(i.mitre_technique),
                 }|tojson }}'>
                     <td><button class="btn btn-sm btn-outline-secondary toggle-details">+</button> {{ i.incident_code }}</td>
                     <td>{{ i.attack_type }}</td>
                     <td><span class="badge bg-{{ 'danger' if i.severity == 'Critical' else 'warning' if i.severity == 'High' else 'secondary' if i.severity == 'Medium' else 'info' }}">{{ i.severity }}</span></td>
-                    <td><span class="badge bg-{{ 'success' if i.status == 'Closed' else 'warning' if i.status == 'Reviewed' else 'danger' }}">{{ i.status }}</span></td>
+                    <td><span class="badge bg-{{ 'danger' if i.status == 'Blocked' else 'warning text-dark' }}">{{ i.status }}</span></td>
                     <td>{{ i.confidence }}</td>
                     <td>{{ i.risk_score }}</td>
                     <td>{{ i.request.ip if i.request else 'N/A' }}</td>
                     <td><code>{{ i.request.url if i.request else 'N/A' }}</code></td>
-                    <td>{{ i.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td>{{ i.created_at | ist }}</td>
                 </tr>
-                <tr class="detail-row d-none bg-black">
+                <tr class="detail-row d-none bg-white">
                     <td colspan="9" class="ps-4">
                         <div class="row g-3">
-                            <div class="col-md-4"><strong>Evidence</strong><p class="mb-0 text-break">{{ i.evidence }}</p></div>
-                            <div class="col-md-4"><strong>Recommendation</strong><p class="mb-0 text-break">{{ i.recommendation }}</p></div>
-                            <div class="col-md-4"><strong>MITRE</strong><p class="mb-0">{{ i.mitre_technique or 'N/A' }}</p></div>
+                            <div class="col-md-2"><strong>Evidence</strong><p class="mb-0 text-break">{{ i.evidence }}</p></div>
+                            <div class="col-md-2"><strong>Recommendation</strong><p class="mb-0 text-break">{{ i.recommendation }}</p></div>
+                            <div class="col-md-2"><strong>MITRE</strong><p class="mb-0">{{ get_mitre_info(i.mitre_technique) }}</p></div>
+                            <div class="col-md-2"><strong>OWASP</strong><p class="mb-0">{{ get_owasp_info(i.mitre_technique) }}</p></div>
+                            <div class="col-md-4 text-end">
+                                {% if i.request and i.request.ip %}
+                                <form method="POST" action="/websentinel/block-ip" style="display:inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                    <input type="hidden" name="ip" value="{{ i.request.ip }}">
+                                    <input type="hidden" name="reason" value="Manual: blocked by analyst from incident {{ i.incident_code }}">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger">Block IP {{ i.request.ip }}</button>
+                                </form>
+                                {% endif %}
+                            </div>
                         </div>
                     </td>
                 </tr>
@@ -96,8 +111,8 @@
     </div>
 </div>
 
-<script>
-const incidentRows = document.querySelectorAll('.incident-row');
+<script nonce="{{ csp_nonce }}">
+const CSRF_TOKEN = '{{ csrf_token() }}';
 const searchInput = document.getElementById('searchInput');
 const severityFilter = document.getElementById('severityFilter');
 const statusFilter = document.getElementById('statusFilter');
@@ -119,25 +134,33 @@ function initToggleButtons() {
     });
 }
 
+function formatTimestamp(ts) {
+    return ts;
+}
+
 function renderIncidents(items) {
     incidentsBody.innerHTML = items.map(item => `
         <tr class="incident-row" data-incident='${JSON.stringify(item).replace(/'/g, '\\u0027')}'>
-            <td><button class="btn btn-sm btn-outline-secondary toggle-details">+</button> ${item.incident_code}</td>
-            <td>${item.attack_type}</td>
-            <td><span class="badge bg-${badgeClass(item.severity)}">${item.severity}</span></td>
-            <td><span class="badge bg-${statusClass(item.status)}">${item.status}</span></td>
-            <td>${item.confidence}</td>
-            <td>${item.risk_score}</td>
-            <td>${item.ip || 'N/A'}</td>
-            <td><code>${item.path || 'N/A'}</code></td>
-            <td>${item.timestamp}</td>
+            <td><button class="btn btn-sm btn-outline-secondary toggle-details">+</button> ${escapeHtml(item.incident_code)}</td>
+            <td>${escapeHtml(item.attack_type)}</td>
+            <td><span class="badge bg-${badgeClass(item.severity)}">${escapeHtml(item.severity)}</span></td>
+            <td><span class="badge bg-${statusClass(item.status)}">${escapeHtml(item.status)}</span></td>
+            <td>${escapeHtml(item.confidence)}</td>
+            <td>${escapeHtml(item.risk_score)}</td>
+            <td>${escapeHtml(item.ip || 'N/A')}</td>
+            <td><code>${escapeHtml(item.path || 'N/A')}</code></td>
+            <td>${formatTimestamp(item.timestamp)}</td>
         </tr>
-        <tr class="detail-row d-none bg-black">
+        <tr class="detail-row d-none bg-white">
             <td colspan="9" class="ps-4">
                 <div class="row g-3">
-                    <div class="col-md-4"><strong>Evidence</strong><p class="mb-0 text-break">${escapeHtml(item.evidence)}</p></div>
-                    <div class="col-md-4"><strong>Recommendation</strong><p class="mb-0 text-break">${escapeHtml(item.recommendation)}</p></div>
-                    <div class="col-md-4"><strong>MITRE</strong><p class="mb-0">${item.mitre_technique || 'N/A'}</p></div>
+                    <div class="col-md-2"><strong>Evidence</strong><p class="mb-0 text-break">${escapeHtml(item.evidence)}</p></div>
+                    <div class="col-md-2"><strong>Recommendation</strong><p class="mb-0 text-break">${escapeHtml(item.recommendation)}</p></div>
+                    <div class="col-md-2"><strong>MITRE</strong><p class="mb-0">${escapeHtml(item.mitre_name || 'N/A')}</p></div>
+                    <div class="col-md-2"><strong>OWASP</strong><p class="mb-0">${escapeHtml(item.owasp_technique || '\u2014')}</p></div>
+                    <div class="col-md-4 text-end">
+                        ${item.ip ? `<form method="POST" action="/websentinel/block-ip" style="display:inline"><input type="hidden" name="csrf_token" value="${CSRF_TOKEN}"><input type="hidden" name="ip" value="${escapeHtml(item.ip)}"><input type="hidden" name="reason" value="Manual: blocked by analyst from incident ${escapeHtml(item.incident_code)}"><button type="submit" class="btn btn-sm btn-outline-danger">Block IP ${escapeHtml(item.ip)}</button></form>` : ''}
+                    </div>
                 </div>
             </td>
         </tr>
@@ -153,9 +176,8 @@ function badgeClass(severity) {
 }
 
 function statusClass(status) {
-    if (status === 'Closed') return 'success';
-    if (status === 'Reviewed') return 'warning text-dark';
-    return 'danger';
+    if (status === 'Blocked') return 'danger';
+    return 'warning text-dark';
 }
 
 function escapeHtml(value) {
@@ -175,24 +197,22 @@ function fetchIncidents() {
         .then(data => renderIncidents(data));
 }
 
-function exportCsv() {
-    const rows = Array.from(document.querySelectorAll('.incident-row'));
-    const headers = ['incident_code','attack_type','severity','status','confidence','risk_score','ip','path','timestamp','evidence','recommendation','mitre_technique'];
-    const csv = [headers.join(',')].concat(rows.map(row => {
-        const incident = JSON.parse(row.dataset.incident);
-        return headers.map(key => `"${String(incident[key] || '').replace(/"/g, '""')}"`).join(',');
-    })).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'incidents.csv';
-    link.click();
-    URL.revokeObjectURL(url);
+function exportIncidents(fmt) {
+    const params = new URLSearchParams();
+    const search = searchInput.value.trim();
+    if (search) params.set('q', search);
+    if (severityFilter.value) params.set('severity', severityFilter.value);
+    if (statusFilter.value) params.set('status', statusFilter.value);
+    params.set('format', fmt);
+    window.location.href = `/websentinel/api/incidents/export?${params.toString()}`;
 }
 
+searchInput.addEventListener('input', fetchIncidents);
+severityFilter.addEventListener('change', fetchIncidents);
+statusFilter.addEventListener('change', fetchIncidents);
 refreshButton.addEventListener('click', fetchIncidents);
-exportButton.addEventListener('click', exportCsv);
+exportButton.addEventListener('click', () => exportIncidents('csv'));
+document.getElementById('exportJson').addEventListener('click', e => { e.preventDefault(); exportIncidents('json'); });
 initToggleButtons();
 {% raw %}fetchIncidents();{% endraw %}
 </script>

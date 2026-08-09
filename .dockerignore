@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.git/
+.github/
+instance/
+venv/
+.venv/
+*.db
+*.pem
+docs/
+LICENSE
+.env
+credentials.json
+token.json

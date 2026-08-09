@@ -1,16 +1,11 @@
 """
 database/init_db.py
 
-Standalone database initializer — run this once to create websentinel.db
-with the Request and Incident tables, independent of starting the full
-Flask server. Useful for:
-  - First-time project setup (see README)
-  - Resetting the database during development (drops + recreates tables)
-  - CI/test environments that need a clean schema without running app.py
+Database initializer — uses Flask-Migrate (Alembic) to manage schema.
 
 Usage:
-    python database/init_db.py            # create tables if they don't exist
-    python database/init_db.py --reset    # DROP all tables and recreate (destroys data)
+    python database/init_db.py            # apply all migrations
+    python database/init_db.py --reset    # downgrade to base, then re-apply
     python database/init_db.py --seed     # also insert sample demo data
 """
 
@@ -21,16 +16,8 @@ import sys
 # the project root to the path, since models.py is imported as a package.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from flask import Flask
+from proxy_app import create_app
 from database.models import db, Request, Incident
-
-
-def create_app(database_uri: str = "sqlite:///websentinel.db"):
-    app = Flask(__name__)
-    app.config["SQLALCHEMY_DATABASE_URI"] = database_uri
-    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-    db.init_app(app)
-    return app
 
 
 def seed_sample_data():
@@ -73,20 +60,21 @@ def main():
     reset = "--reset" in sys.argv
     seed = "--seed" in sys.argv
 
-    database_uri = os.environ.get("WEBSENTINEL_DB_URI", "sqlite:///websentinel.db")
-    app = create_app(database_uri)
+    app = create_app()
     with app.app_context():
         if reset:
-            print("Dropping all tables...")
-            db.drop_all()
+            print("Downgrading to base...")
+            from flask_migrate import downgrade
+            downgrade(revision="base")
 
-        db.create_all()
-        print("Tables created: requests, incidents")
+        from flask_migrate import upgrade
+        upgrade()
+        print("Migrations applied.")
 
         if seed:
             seed_sample_data()
 
-    print(f"Database ready at {database_uri}")
+    print(f"Database ready at {app.config['SQLALCHEMY_DATABASE_URI']}")
 
 
 if __name__ == "__main__":

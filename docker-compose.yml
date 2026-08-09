@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: websentinel
+      POSTGRES_PASSWORD: websentinel
+      POSTGRES_DB: websentinel
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U websentinel"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      WEBSENTINEL_DB_URI: postgresql+psycopg://websentinel:websentinel@postgres:5432/websentinel
+      WEBSENTINEL_TARGET: ${WEBSENTINEL_TARGET:-http://host.docker.internal:9000}
+      WEBSENTINEL_ADMIN_USER: ${WEBSENTINEL_ADMIN_USER:-admin}
+      # No fallback: an unset variable stays unset so the app's own fail-fast
+      # refuses to start with a default password.
+      WEBSENTINEL_ADMIN_PASS: ${WEBSENTINEL_ADMIN_PASS}
+      WEBSENTINEL_SECRET_KEY: ${WEBSENTINEL_SECRET_KEY:-changeme-generate-a-random-secret}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Optional — Gmail API alerting: run the one-time OAuth login locally,
+    # then mount the resulting files so the container can reuse the token.
+    # (Commented out so alerting is not required to start.)
+    # volumes:
+    #   - ./credentials.json:/app/credentials.json:ro
+    #   - ./token.json:/app/token.json:ro
+
+volumes:
+  pgdata:

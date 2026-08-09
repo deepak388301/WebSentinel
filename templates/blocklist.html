@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-start gap-3 mb-4">
+    <div>
+        <h3 class="mb-2">IP Blocklist</h3>
+        <p class="text-muted mb-0">Blocked IPs — auto-blocked repeat offenders and manual blocks.</p>
+    </div>
+</div>
+
+{% if blocked %}
+<div class="card bg-light-card text-dark p-4">
+    <div class="table-responsive">
+        <table class="table table-striped align-middle mb-0">
+            <thead>
+                <tr>
+                    <th>IP</th>
+                    <th>Reason</th>
+                    <th>Blocked By</th>
+                    <th>Blocked At</th>
+                    <th>Expires</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in blocked %}
+                <tr>
+                    <td><code>{{ entry.ip }}</code></td>
+                    <td>{{ entry.reason }}</td>
+                    <td><span class="badge bg-{{ 'warning text-dark' if entry.blocked_by == 'auto' else 'secondary' }}">{{ entry.blocked_by }}</span></td>
+                    <td>{{ entry.blocked_at | ist if entry.blocked_at else 'N/A' }}</td>
+                    <td>
+                        {% if entry.expires_at %}
+                            {{ entry.expires_at | ist }}
+                        {% else %}
+                            <span class="text-muted">Permanent</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <form method="POST" action="/websentinel/unblock-ip" style="display:inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                            <input type="hidden" name="ip" value="{{ entry.ip }}">
+                            <button type="submit" class="btn btn-sm btn-outline-danger">Unblock</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="card bg-light-card text-dark p-4 text-center">
+    <p class="text-muted mb-0">No IPs are currently blocked.</p>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,8 @@
+{
+    "T1190": "Exploit Public-Facing Application",
+    "T1059.007": "JavaScript Execution",
+    "T1083": "File and Directory Discovery",
+    "T1110": "Brute Force",
+    "T1595.003": "Active Scanning: Wordlist Scanning",
+    "T1059": "Command and Scripting Interpreter"
+}
