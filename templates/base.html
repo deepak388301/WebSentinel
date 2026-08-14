@@ -73,6 +73,9 @@
                         <a class="nav-link {% if active_page == 'blocklist' %}active{% endif %}" href="/websentinel/blocklist">Blocklist</a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link {% if active_page == 'targets' %}active{% endif %}" href="/websentinel/targets">Targets</a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link {% if active_page == 'settings' %}active{% endif %}" href="/websentinel/settings">Settings</a>
                     </li>
                 </ul>
@@ -81,6 +84,16 @@
     </nav>
 
     <main class="container py-4">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category if category != 'message' else 'info' }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
         {% block content %}{% endblock %}
     </main>
 

@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-start gap-3 mb-4">
+    <div>
+        <h3 class="mb-2">Protected Targets</h3>
+        <p class="text-muted mb-0">
+            Manage the backend targets WebSentinel forwards traffic to. Only one target is
+            ever <strong>active</strong> at a time — the proxy forwards every request to it.
+        </p>
+    </div>
+</div>
+
+<div class="card bg-light-card text-dark p-4 mb-4">
+    <h5 class="mb-3">Add Target</h5>
+    <form method="POST" action="/websentinel/targets/add">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+        <div class="row g-3 mb-3">
+            <div class="col-md-3">
+                <label for="name" class="form-label">Target Name</label>
+                <input type="text" id="name" name="name" class="form-control"
+                       placeholder="e.g. Production app" required>
+            </div>
+            <div class="col-md-4">
+                <label for="target_url" class="form-label">Target URL</label>
+                <input type="text" id="target_url" name="target_url" class="form-control"
+                       placeholder="https://backend.example.com" required>
+                <div class="form-text">http or https only; no credentials allowed.</div>
+            </div>
+            <div class="col-md-3">
+                <label for="description" class="form-label">Description</label>
+                <input type="text" id="description" name="description" class="form-control"
+                       placeholder="Optional notes">
+            </div>
+            <div class="col-md-2">
+                <label class="form-label d-block">Enabled</label>
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="enabled" name="enabled" value="true" checked>
+                    <label class="form-check-label" for="enabled">Eligible to activate</label>
+                </div>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Add Target</button>
+    </form>
+</div>
+
+{% if targets %}
+<div class="card bg-light-card text-dark p-4">
+    <div class="table-responsive">
+        <table class="table table-striped align-middle mb-0">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Target URL</th>
+                    <th>Status</th>
+                    <th>Active</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for t in targets %}
+                <tr>
+                    <td>
+                        {{ t.name }}
+                        {% if t.description %}
+                            <div class="text-muted small">{{ t.description }}</div>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <code>{{ t.target_url }}</code>
+                        {% if private_targets.get(t.id) %}
+                            <span class="badge bg-warning text-dark" title="This target resolves to a loopback/private/link-local address. This is fine for internal backends, but confirm it is intentional.">Private/internal</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <span class="badge bg-{{ 'success' if t.enabled else 'secondary' }}">{{ 'Enabled' if t.enabled else 'Disabled' }}</span>
+                    </td>
+                    <td>
+                        {% if t.active %}
+                            <span class="badge bg-primary">Active</span>
+                        {% else %}
+                            <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ t.created_at | ist if t.created_at else 'N/A' }}</td>
+                    <td>
+                        <div class="d-flex flex-wrap gap-1">
+                            <a href="/websentinel/targets/{{ t.id }}/edit" class="btn btn-sm btn-outline-dark">Edit</a>
+                            <form method="POST" action="/websentinel/targets/{{ t.id }}/toggle" style="display:inline">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                <button type="submit" class="btn btn-sm btn-outline-{{ 'secondary' if t.enabled else 'success' }}">
+                                    {{ 'Disable' if t.enabled else 'Enable' }}
+                                </button>
+                            </form>
+                            {% if t.enabled and not t.active %}
+                                <form method="POST" action="/websentinel/targets/{{ t.id }}/activate" style="display:inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                    <button type="submit" class="btn btn-sm btn-outline-primary">Set Active</button>
+                                </form>
+                            {% endif %}
+                            <form method="POST" action="/websentinel/targets/{{ t.id }}/test" style="display:inline">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                <button type="submit" class="btn btn-sm btn-outline-info">Test</button>
+                            </form>
+                            <button type="button" class="btn btn-sm btn-outline-danger" data-bs-toggle="modal" data-bs-target="#deleteModal{{ t.id }}">
+                                Delete
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% for t in targets %}
+<div class="modal fade" id="deleteModal{{ t.id }}" tabindex="-1" aria-labelledby="deleteModalLabel{{ t.id }}" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="deleteModalLabel{{ t.id }}">Delete target?</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p>Delete target <strong>{{ t.name }}</strong> (<code>{{ t.target_url }}</code>)?</p>
+                <p class="text-muted mb-0">This cannot be undone. A disabled target is never deleted by disabling — deletion is this action only.
+                {% if t.active %}<strong>This is the currently active target.</strong> Deleting it makes the proxy fall back to WEBSENTINEL_TARGET.{% endif %}</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-dark" data-bs-dismiss="modal">Cancel</button>
+                <form method="POST" action="/websentinel/targets/{{ t.id }}/delete">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    <input type="hidden" name="confirm" value="1"/>
+                    <button type="submit" class="btn btn-danger">Delete permanently</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endfor %}
+{% else %}
+<div class="card bg-light-card text-dark p-4 text-center">
+    <p class="text-muted mb-0">
+        No targets configured yet. Add one above — the proxy falls back to
+        <code>WEBSENTINEL_TARGET</code> until a target is marked active.
+    </p>
+</div>
+{% endif %}
+{% endblock %}

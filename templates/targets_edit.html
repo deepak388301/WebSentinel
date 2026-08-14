@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-start gap-3 mb-4">
+    <div>
+        <h3 class="mb-2">Edit Target</h3>
+        <p class="text-muted mb-0">Update the details of target <strong>{{ target.name }}</strong>.</p>
+    </div>
+    <a href="/websentinel/targets" class="btn btn-outline-dark">← Back to Targets</a>
+</div>
+
+<div class="card bg-light-card text-dark p-4">
+    <form method="POST" action="/websentinel/targets/{{ target.id }}/edit">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+        <div class="row g-3 mb-3">
+            <div class="col-md-4">
+                <label for="name" class="form-label">Target Name</label>
+                <input type="text" id="name" name="name" class="form-control"
+                       value="{{ target.name }}" required>
+            </div>
+            <div class="col-md-6">
+                <label for="target_url" class="form-label">Target URL</label>
+                <input type="text" id="target_url" name="target_url" class="form-control"
+                       value="{{ target.target_url }}" required>
+                <div class="form-text">http or https only; no credentials allowed.</div>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label d-block">Enabled</label>
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="enabled" name="enabled" value="true"
+                           {% if target.enabled %}checked{% endif %}>
+                    <label class="form-check-label" for="enabled">Eligible to activate</label>
+                </div>
+                {% if target.active %}
+                    <div class="form-text text-primary">This is the currently active target.</div>
+                {% endif %}
+            </div>
+        </div>
+        <div class="mb-3">
+            <label for="description" class="form-label">Description</label>
+            <input type="text" id="description" name="description" class="form-control"
+                   value="{{ target.description }}" placeholder="Optional notes">
+        </div>
+        <button type="submit" class="btn btn-primary">Save Changes</button>
+        <a href="/websentinel/targets" class="btn btn-outline-dark">Cancel</a>
+    </form>
+</div>
+{% endblock %}

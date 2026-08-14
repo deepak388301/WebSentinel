@@ -51,10 +51,11 @@ from dotenv import load_dotenv
 # set env vars first are unaffected.
 load_dotenv()
 
-from flask import Flask, Blueprint, request, Response, render_template, jsonify, current_app, session, redirect, url_for
-from flask_migrate import Migrate, upgrade
+from flask import Flask, Blueprint, request, Response, render_template, jsonify, current_app, session, redirect, url_for, flash
+from flask_migrate import Migrate
 from flask_wtf.csrf import CSRFProtect
 from sqlalchemy import func, or_
+from sqlalchemy.exc import IntegrityError
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from database.models import db, Request as RequestModel, Incident, _utc_to_ist
@@ -64,6 +65,15 @@ from utils.reference_helpers import get_mitre_info, get_owasp_info
 from utils.alerting import maybe_alert
 from utils.ip_blocklist import is_blocked, maybe_auto_block
 from utils.rate_limit import is_rate_limited, seconds_until_reset
+from utils.targets import (
+    normalize_target_url,
+    is_private_target,
+    set_active_target,
+    get_active_target_url,
+    bootstrap_target_from_env,
+    test_target_connection,
+    audit as audit_target_event,
+)
 
 logger = logging.getLogger("websentinel")
 
@@ -244,6 +254,17 @@ def create_app(database_uri=None, target_url=None):
             cleanup_old_data(app)
         except Exception:
             pass  # tables not yet created — skip cleanup
+
+        # Section 18: seed the initial active target from
+        # WEBSENTINEL_TARGET/DEFAULT_TARGET_URL when the targets table is
+        # empty. Skipped silently when the table doesn't exist yet (e.g.
+        # first boot before `flask db upgrade`); the __main__ block below
+        # re-runs it right after upgrade().
+        try:
+            bootstrap_target_from_env()
+        except Exception:
+            db.session.rollback()
+            pass  # targets table not yet created — bootstrap runs after upgrade
 
     @app.template_filter("ist")
     def fmt_ist(dt):
@@ -692,7 +713,7 @@ def dashboard_home():
         critical_incidents=critical,
         blocked_count=blocked,
         security_score=security_score,
-        target=current_app.config["WEBSENTINEL_TARGET"],
+        target=get_active_target_url(),
         uptime=format_uptime(APP_STARTED_AT),
         top_attacks=top_attacks,
         severity_counts=severity_counts,
@@ -777,7 +798,7 @@ def api_stats():
         "low": low,
         "blocked": blocked,
         "security_score": security_score,
-        "target": current_app.config["WEBSENTINEL_TARGET"],
+        "target": get_active_target_url(),
         "uptime": format_uptime(APP_STARTED_AT),
         "last_updated": _utc_to_ist(datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M:%S"),
     })
@@ -994,6 +1015,205 @@ def unblock_ip_route():
     return redirect(url_for("websentinel.dashboard_blocklist"))
 
 
+# ---------------------------------------------------------------------
+# Target management routes — manual add/edit/enable/disable/activate/
+# delete/test of the protected backend targets (see utils/targets.py).
+#
+# Security model: every route is @login_required, every state change is a
+# CSRF-protected POST, URLs are validated server-side (http/https, hostname,
+# no embedded credentials), and a target pointing at a loopback/private/
+# address is ACCEPTED with an informational notice — internal backends are a
+# legitimate use case, so a private address is never a hard block (section 3).
+# Only one target is ever `active` at a time (section 0); the proxy forwards
+# only to that one.
+# ---------------------------------------------------------------------
+
+@websentinel_bp.route("/targets")
+@login_required
+def dashboard_targets():
+    from database.models import Target
+    targets = Target.query.order_by(Target.id.asc()).all()
+    private_targets = {t.id: is_private_target(t.target_url) for t in targets}
+    return render_template(
+        "targets.html",
+        targets=targets,
+        private_targets=private_targets,
+        active_page="targets",
+    )
+
+
+@websentinel_bp.route("/targets/add", methods=["POST"])
+@login_required
+def add_target():
+    from database.models import Target
+    name = request.form.get("name", "").strip()
+    description = request.form.get("description", "").strip()
+    enabled = request.form.get("enabled") == "true"
+
+    if not name:
+        flash("Target name is required.", "danger")
+        return redirect(url_for("websentinel.dashboard_targets"))
+
+    try:
+        url = normalize_target_url(request.form.get("target_url", ""))
+    except ValueError as e:
+        flash(str(e), "danger")
+        return redirect(url_for("websentinel.dashboard_targets"))
+
+    if Target.query.filter_by(target_url=url).first():
+        flash("A target with this URL already exists.", "danger")
+        return redirect(url_for("websentinel.dashboard_targets"))
+
+    target = Target(
+        name=name,
+        target_url=url,
+        description=description,
+        enabled=enabled,
+        active=False,
+    )
+    db.session.add(target)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        flash("A target with this URL already exists.", "danger")
+        return redirect(url_for("websentinel.dashboard_targets"))
+
+    audit_target_event("created", target, session.get("username"))
+    if is_private_target(url):
+        flash("This target resolves to a private/internal address — confirm this is intentional.", "warning")
+    flash(f"Target '{name}' added.", "success")
+    return redirect(url_for("websentinel.dashboard_targets"))
+
+
+@websentinel_bp.route("/targets/<int:target_id>/edit", methods=["GET", "POST"])
+@login_required
+def edit_target(target_id):
+    from database.models import Target
+    target = db.session.get(Target, target_id)
+    if target is None:
+        flash("Target not found.", "danger")
+        return redirect(url_for("websentinel.dashboard_targets"))
+
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        description = request.form.get("description", "").strip()
+        enabled = request.form.get("enabled") == "true"
+
+        if not name:
+            flash("Target name is required.", "danger")
+            return render_template("targets_edit.html", target=target, active_page="targets")
+
+        try:
+            url = normalize_target_url(request.form.get("target_url", ""))
+        except ValueError as e:
+            flash(str(e), "danger")
+            return render_template("targets_edit.html", target=target, active_page="targets")
+
+        duplicate = Target.query.filter(
+            Target.target_url == url, Target.id != target.id
+        ).first()
+        if duplicate:
+            flash("Another target already uses this URL.", "danger")
+            return render_template("targets_edit.html", target=target, active_page="targets")
+
+        url_changed = url != target.target_url
+        target.name = name
+        target.target_url = url
+        target.description = description
+        target.enabled = enabled
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash("Another target already uses this URL.", "danger")
+            return render_template("targets_edit.html", target=target, active_page="targets")
+
+        audit_target_event("updated", target, session.get("username"))
+        if url_changed and is_private_target(url):
+            flash("This target resolves to a private/internal address — confirm this is intentional.", "warning")
+        flash(f"Target '{name}' updated.", "success")
+        return redirect(url_for("websentinel.dashboard_targets"))
+
+    return render_template("targets_edit.html", target=target, active_page="targets")
+
+
+@websentinel_bp.route("/targets/<int:target_id>/toggle", methods=["POST"])
+@login_required
+def toggle_target(target_id):
+    from database.models import Target
+    target = db.session.get(Target, target_id)
+    if target is None:
+        flash("Target not found.", "danger")
+        return redirect(url_for("websentinel.dashboard_targets"))
+
+    target.enabled = not target.enabled
+    db.session.commit()
+    state = "enabled" if target.enabled else "disabled"
+    audit_target_event(f"{state}", target, session.get("username"))
+    flash(f"Target '{target.name}' {state}.", "success")
+    return redirect(url_for("websentinel.dashboard_targets"))
+
+
+@websentinel_bp.route("/targets/<int:target_id>/activate", methods=["POST"])
+@login_required
+def activate_target(target_id):
+    from database.models import Target
+    target = db.session.get(Target, target_id)
+    if target is None:
+        flash("Target not found.", "danger")
+        return redirect(url_for("websentinel.dashboard_targets"))
+    if not target.enabled:
+        flash("A disabled target cannot be set active — enable it first.", "danger")
+        return redirect(url_for("websentinel.dashboard_targets"))
+
+    set_active_target(target.id)
+    audit_target_event("activated", target, session.get("username"))
+    flash(f"Target '{target.name}' is now the active target.", "success")
+    return redirect(url_for("websentinel.dashboard_targets"))
+
+
+@websentinel_bp.route("/targets/<int:target_id>/delete", methods=["POST"])
+@login_required
+def delete_target(target_id):
+    from database.models import Target
+    target = db.session.get(Target, target_id)
+    if target is None:
+        flash("Target not found.", "danger")
+        return redirect(url_for("websentinel.dashboard_targets"))
+
+    # Explicit confirmation is required server-side, not just in the UI
+    # modal — a bare POST without confirm=1 is rejected (section 8).
+    if request.form.get("confirm") != "1":
+        flash("Deletion was not confirmed — nothing was deleted.", "warning")
+        return redirect(url_for("websentinel.dashboard_targets"))
+
+    was_active = target.active
+    deleted_info = {"id": target.id, "name": target.name, "target_url": target.target_url}
+    db.session.delete(target)
+    db.session.commit()
+    audit_target_event("deleted", deleted_info, session.get("username"))
+    flash(f"Target '{deleted_info['name']}' deleted.", "success")
+    if was_active:
+        flash("The active target was deleted — the proxy now falls back to WEBSENTINEL_TARGET.", "warning")
+    return redirect(url_for("websentinel.dashboard_targets"))
+
+
+@websentinel_bp.route("/targets/<int:target_id>/test", methods=["POST"])
+@login_required
+def test_target(target_id):
+    from database.models import Target
+    target = db.session.get(Target, target_id)
+    if target is None:
+        flash("Target not found.", "danger")
+        return redirect(url_for("websentinel.dashboard_targets"))
+
+    ok, message = test_target_connection(target.target_url)
+    audit_target_event("tested-connection", target, session.get("username"))
+    flash(f"{target.name}: {message}", "success" if ok else "danger")
+    return redirect(url_for("websentinel.dashboard_targets"))
+
+
 @websentinel_bp.route("/settings")
 @login_required
 def dashboard_settings():
@@ -1073,7 +1293,11 @@ def proxy(path):
 
     data, findings = inspect_request()
     scored_findings = [calculate_risk(dict(f)) for f in findings]
-    target_url = current_app.config["WEBSENTINEL_TARGET"]
+    # Target selection replaces the static TARGET_URL lookup at the Forward
+    # step only — it runs after inspection/blocking, so a request can never
+    # skip the detection engine, and it forwards to the single active+enabled
+    # target from the database (falling back to WEBSENTINEL_TARGET when none).
+    target_url = get_active_target_url()
     should_block = _should_block(data, findings, scored_findings)
 
     # A known repeat brute-force offender (already over the threshold from
@@ -1175,7 +1399,13 @@ if __name__ == "__main__":
     # in production (see README); `flask db upgrade` / start_websentinel.sh
     # apply schema migrations before the server starts.
     with app.app_context():
-        upgrade()
+        # The targets table only exists after upgrade() on a fresh install,
+        # so the startup bootstrap runs here too (section 18).
+        try:
+            bootstrap_target_from_env()
+        except Exception:
+            db.session.rollback()
+            logger.exception("Target bootstrap failed — proxy will use the env-var fallback.")
 
     port = int(os.environ.get("WEBSENTINEL_PORT", 8080))
     host = os.environ.get("WEBSENTINEL_HOST", "127.0.0.1")

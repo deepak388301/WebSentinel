@@ -290,6 +290,49 @@ Then open:
 
 - http://localhost:8080/websentinel/
 
+### Target Management
+
+The backend target that WebSentinel forwards traffic to can be managed from
+the dashboard (**Targets** page under `/websentinel/targets`) instead of
+editing source code or environment configuration.
+
+Flow:
+
+```text
+Client → WebSentinel → active protected target → response → WebSentinel → Client
+```
+
+Key points:
+
+- **Only one target is ever active at a time.** The Targets page lets you
+  add, edit, enable/disable, delete, and *Test* many configured targets, and
+  **Set Active** promotes one enabled target to the active slot — clearing
+  `active` on every other row in a single database update. The proxy forwards
+  every request to that single active target. There is **no** simultaneous
+  multi-target routing (no host- or path-based routing).
+- **On first startup**, if the `targets` table is empty, WebSentinel
+  auto-creates one row from `WEBSENTINEL_TARGET` (falling back to
+  `DEFAULT_TARGET_URL`), marked both enabled and active. After that one-time
+  bootstrap the database is the sole source of truth for the active target;
+  the environment variable only seeds the initial row and is not re-read on
+  every request. If the table is empty for any other reason (e.g. the only
+  target was deleted), the proxy falls back to
+  `WEBSENTINEL_TARGET`/`DEFAULT_TARGET_URL` directly and logs a clear warning.
+- **Security model — informational notice, not a hard block.** Target URLs
+  are validated server-side (absolute `http`/`https` only, hostname required,
+  no embedded credentials, trailing slashes stripped, no exact duplicates).
+  A target that points at a loopback/private/link-local address (for example
+  `http://127.0.0.1:9000` or `http://localhost:5173`) is **accepted** — such
+  internal backends are a legitimate, common deployment — and the UI shows a
+  "Private/internal" badge asking you to confirm the choice. The same
+  IP-classification logic as the SSRF detector (`detectors/ssrf.py`) is used,
+  so the notice never disagrees with the detector. The optional **Test**
+  action uses the already-validated stored URL with a short timeout and
+  `allow_redirects=False` (a redirect to an internal address would be a
+  classic SSRF bypass), and never affects proxy behavior.
+- Every management action requires the dashboard admin login and is a
+  CSRF-protected POST; deletion requires explicit confirmation.
+
 Rate limiting (proxy traffic, not the dashboard):
 
 ```bash

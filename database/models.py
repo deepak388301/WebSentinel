@@ -161,3 +161,34 @@ class Setting(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     key = db.Column(db.String(100), unique=True, nullable=False)
     value = db.Column(db.Text, nullable=False, default="")
+
+
+class Target(db.Model):
+    """A protected backend target that the proxy can forward traffic to.
+
+    The table may hold many *configured* targets, but AT MOST ONE is ever
+    ``active`` at a time. ``enabled`` controls whether a target is eligible
+    to be activated at all; ``active`` marks the single one currently in
+    use. The proxy reads whichever target is ``active`` from the database
+    on each request and forwards only to that one (never multiple targets
+    simultaneously). When no target is active, forwarding falls back to
+    ``WEBSENTINEL_TARGET`` / ``DEFAULT_TARGET_URL``.
+
+    ``target_url`` is validated at save time (http/https, hostname
+    required, no embedded credentials) and normalized by stripping
+    trailing slashes — the same convention the env-var fallback uses.
+    """
+    __tablename__ = "targets"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    target_url = db.Column(db.String(500), nullable=False, unique=True)
+    description = db.Column(db.Text, nullable=False, default="")
+    enabled = db.Column(db.Boolean, nullable=False, default=True)
+    active = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.Index("ix_targets_active", "active"),
+    )
